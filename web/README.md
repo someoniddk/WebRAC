@@ -55,7 +55,7 @@ The port itself is not a complete game yet; see the repository README.
 node web/serve.mjs      # serves web/, /assets/ and /data/ on 127.0.0.1:8091
 ```
 
-Open <http://127.0.0.1:8091/> in Chromium.
+Open "YOUR IP HERE" in Chromium.
 
 Or run both steps with Chromium prepared for WebGPU (Vulkan + WebGPU flags,
 dedicated profile):
