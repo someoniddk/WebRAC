@@ -1,4 +1,5 @@
-# WebRAC
+# <img width="707" height="353" alt="WEBRAC LOGO" src="https://github.com/user-attachments/assets/feb50e15-4fd7-431b-a453-e9e335edb1e9" />
+
 
 WebRAC is an unofficial browser port of *Ratchet & Clank* (2002). This project is a fork of ReRAC and is based on
 ReRAC's Rust/Bevy game engine, adapted to run in the browser with WebAssembly and WebGPU.
