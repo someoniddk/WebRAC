@@ -52,7 +52,7 @@ The port itself is not a complete game yet; see the repository README.
 
 ```sh
 ./web/build.sh          # cargo build + wasm-bindgen into web/pkg/
-node web/serve.mjs      # serves web/, /assets/ and /data/ on 127.0.0.1:8091
+node web/serve.mjs      # serves web/, /assets/ and /data/ on "YOUR IP HERE"
 ```
 
 Open "YOUR IP HERE" in Chromium.
