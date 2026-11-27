@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebRAC — Ratchet &amp; Clank in the browser</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #05070a;
+      --panel: #0d141e;
+      --panel-2: #111b28;
+      --line: #223044;
+      --text: #e8eef6;
+      --muted: #9fb0c3;
+      --accent: #6cd0ff;
+      --accent-2: #2a8cff;
+    }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text); }
+    canvas { display: block; width: 100vw !important; height: 100vh !important; outline: none; }
+
+    /* ---- launcher ---- */
+    #launcher {
+      position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+      padding: 2rem; text-align: center;
+      background:
+        radial-gradient(1100px 720px at 50% 18%, #17263d 0%, #0a1019 52%, #030507 100%);
+    }
+    #launcher.hidden { display: none; }
+    .launcher-card { display: flex; flex-direction: column; align-items: center; gap: 1.05rem; }
+    .logo { width: min(26rem, 70vw); height: auto; filter: drop-shadow(0 18px 50px rgba(0, 0, 0, .55)); }
+    .tagline { margin: 0; color: var(--muted); letter-spacing: .12em; text-transform: uppercase; font-size: .72rem; }
+    .launch-row { display: flex; align-items: center; gap: .8rem; margin-top: .35rem; }
+    .play {
+      appearance: none; border: 1px solid #3f7fb3; border-radius: 999px;
+      padding: .78rem 2.6rem; font: inherit; font-weight: 650; font-size: 1.05rem; letter-spacing: .04em;
+      color: #06111c; background: linear-gradient(180deg, #a9e8ff, #5cc6ff 55%, #2a9be6);
+      box-shadow: 0 10px 30px rgba(42, 155, 230, .28), inset 0 1px 0 rgba(255, 255, 255, .65);
+      cursor: pointer; transition: transform .12s ease, filter .12s ease;
+    }
+    .play:hover { filter: brightness(1.07); transform: translateY(-1px); }
+    .play:active { transform: translateY(0); }
+    .icon-button {
+      appearance: none; display: inline-flex; align-items: center; justify-content: center;
+      width: 3rem; height: 3rem; border-radius: 50%; cursor: pointer;
+      color: #cfe8ff; background: rgba(17, 27, 40, .9); border: 1px solid var(--line);
+      transition: background .12s ease, border-color .12s ease, transform .12s ease;
+    }
+    .icon-button:hover { background: #162438; border-color: #36506d; transform: rotate(12deg); }
+    .icon-button svg { width: 1.35rem; height: 1.35rem; fill: currentColor; }
+    .launcher-note { max-width: min(32rem, 84vw); margin: .1rem 0 0; color: #6f8298; font-size: .76rem; line-height: 1.4; }
+
+    /* ---- settings ---- */
+    .modal {
+      position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
+      padding: 1.2rem; background: rgba(2, 5, 9, .72); backdrop-filter: blur(6px);
+    }
+    .modal.hidden { display: none; }
+    .settings-panel {
+      width: min(46rem, 96vw); max-height: 88vh; display: flex; flex-direction: column;
+      background: linear-gradient(180deg, #101a28, #0b121c); border: 1px solid var(--line);
+      border-radius: 1rem; box-shadow: 0 30px 90px rgba(0, 0, 0, .6); overflow: hidden;
+    }
+    .settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.15rem 1.3rem .9rem; border-bottom: 1px solid var(--line); }
+    .settings-head h2 { margin: 0 0 .2rem; font-size: 1.15rem; letter-spacing: .02em; }
+    .settings-head p { margin: 0; color: var(--muted); font-size: .8rem; }
+    .done {
+      appearance: none; border: 1px solid #3f7fb3; border-radius: .55rem; padding: .48rem 1.15rem;
+      font: inherit; font-weight: 600; color: #06111c; background: linear-gradient(180deg, #a9e8ff, #5cc6ff);
+      cursor: pointer;
+    }
+    .done:hover { filter: brightness(1.07); }
+    .settings-body { padding: .4rem 1.3rem 1rem; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: .2rem 1.6rem; }
+    .settings-body section { padding: .8rem 0; min-width: 0; }
+    .settings-body section:last-child { grid-column: 1 / -1; }
+    .settings-body h3 { margin: 0 0 .55rem; color: var(--accent); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; }
+    .setting { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .3rem 0; font-size: .88rem; }
+    .setting > span { color: #cbd7e5; }
+    .setting select {
+      appearance: none; min-width: 9.5rem; max-width: 13rem; padding: .38rem .7rem;
+      color: var(--text); background: #0a121c; border: 1px solid #2a3c52; border-radius: .45rem;
+      font: inherit; font-size: .84rem; cursor: pointer;
+    }
+    .setting select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .settings-body .setting-hint { margin: -.08rem 0 .45rem; color: #6f8298; font-size: .72rem; line-height: 1.35; }
+    .settings-body .hint { margin: .55rem 0 0; color: #6f8298; font-size: .75rem; line-height: 1.4; }
+    .settings-foot { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem 1.3rem 1rem; border-top: 1px solid var(--line); }
+    .secondary {
+      appearance: none; border: 1px solid #2a3c52; border-radius: .5rem; padding: .45rem .9rem;
+      color: #cbd7e5; background: #0a121c; font: inherit; font-size: .82rem; cursor: pointer;
+    }
+    .secondary:hover { border-color: #3f5a78; }
+    #settings-saved { color: #6f8298; font-size: .75rem; }
+
+    /* ---- loading / errors ---- */
+    #status {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 1rem;
+      background: radial-gradient(circle at 50% 40%, #1a2230, #05070a 70%);
+      z-index: 50; text-align: center; padding: 2rem;
+    }
+    #status h1 { font-size: 1.6rem; margin: 0; font-weight: 600; letter-spacing: .04em; }
+    #status p { margin: 0; color: var(--muted); max-width: 42rem; line-height: 1.5; }
+    #status .bar { width: min(28rem, 70vw); height: 6px; background: #1d2735; border-radius: 3px; overflow: hidden; }
+    #status .bar > div { height: 100%; width: 0%; background: var(--accent); transition: width .2s; }
+    #status.hidden { display: none; }
+    #status.error h1 { color: #ff8080; }
+    #status pre { text-align: left; white-space: pre-wrap; max-width: 90vw; max-height: 45vh; overflow: auto; color: #ffb0b0; font-size: .8rem; }
+
+    #hint {
+      position: fixed; left: 50%; bottom: .7rem; transform: translateX(-50%);
+      z-index: 5; color: #d4dee8; font-size: .72rem; line-height: 1;
+      background: rgba(5, 8, 12, .68); border: 1px solid rgba(255, 255, 255, .1);
+      border-radius: 999px; padding: .4rem .75rem; white-space: nowrap;
+      pointer-events: none; opacity: 0; transition: opacity .3s ease;
+    }
+    #hint.show { opacity: 1; }
+    body.cutscene #hint, body.movie #hint { opacity: 0 !important; }
+
+    /* ---- cutscene skip ---- */
+    #skip {
+      position: fixed; right: 1rem; bottom: 1rem; z-index: 20; display: none;
+      align-items: center; gap: .55rem; appearance: none; cursor: pointer;
+      padding: .55rem .9rem; border-radius: 999px; font: inherit; font-size: .82rem; font-weight: 600;
+      color: #dff3ff; background: rgba(8, 16, 26, .82); border: 1px solid #3a5876;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, .4); backdrop-filter: blur(4px);
+    }
+    body.cutscene #skip, body.movie #skip { display: inline-flex; }
+    #skip:hover { border-color: var(--accent); background: rgba(16, 30, 46, .92); }
+    #skip kbd {
+      font: inherit; font-size: .7rem; color: #9fc6e8; padding: .12rem .38rem;
+      border: 1px solid #35506b; border-radius: .3rem; background: #0a141f;
+    }
+  </style>
+</head>
+<body>
+  <div id="launcher">
+    <div class="launcher-card">
+      <img class="logo" src="./WEBRAC%20LOGO.png" alt="WebRAC">
+      <p class="tagline">Ratchet &amp; Clank in the browser</p>
+      <div class="launch-row">
+        <button id="play" class="play" type="button">Play</button>
+        <button id="settings-button" class="icon-button" type="button" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.48.48 0 0 0 .12-.61l-1.92-3.32a.48.48 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.48.48 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.48.48 0 0 0-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>
+        </button>
+      </div>
+      <p class="launcher-note">WebRAC is a fork of ReRAC, based on the ReRAC engine.</p>
+      <p class="launcher-note">Bring your own extracted disc data · Chromium with WebGPU</p>
+    </div>
+  </div>
+
+  <div id="settings" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="settings-panel">
+      <div class="settings-head">
+        <div>
+          <h2 id="settings-title">Settings</h2>
+          <p>Descriptions appear below each setting. Saved in this browser and applied when you press Play.</p>
+        </div>
+        <button id="settings-close" class="done" type="button">Done</button>
+      </div>
+      <div class="settings-body">
+        <section>
+          <h3>Graphics</h3>
+          <label class="setting"><span>Quality preset</span>
+            <select id="set-preset">
+              <option value="original">Original</option>
+              <option value="performance">Performance</option>
+              <option value="enhanced">Enhanced</option>
+              <option value="maximum">Maximum</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <p class="setting-hint">Choose a preset for several graphics options at once. Custom lets you adjust them separately.</p>
+          <label class="setting"><span>Anti-aliasing</span>
+            <select id="set-aa">
+              <option value="original">Original</option>
+              <option value="off">Off</option>
+              <option value="2x">2x</option>
+              <option value="4x">4x</option>
+              <option value="8x">8x</option>
+            </select>
+          </label>
+          <p class="setting-hint">Smooths jagged edges. Higher levels use more GPU power; Original uses the game's normal rendering.</p>
+          <label class="setting"><span>Detail distance</span>
+            <select id="set-detail">
+              <option value="near">Near</option>
+              <option value="original">Original</option>
+              <option value="far">Far</option>
+              <option value="farther">Farther</option>
+              <option value="maximum">Maximum</option>
+            </select>
+          </label>
+          <p class="setting-hint">Sets how far level details remain visible. Farther settings can cost more performance.</p>
+          <label class="setting"><span>Texture filtering</span>
+            <select id="set-textures">
+              <option value="original">Original</option>
+              <option value="smooth">Smooth</option>
+              <option value="sharp">Sharp</option>
+            </select>
+          </label>
+          <p class="setting-hint">Changes how textures look when viewed at an angle or from a distance.</p>
+          <label class="setting"><span>HUD</span>
+            <select id="set-hud">
+              <option value="original">Original</option>
+              <option value="sharp">Sharp pixels</option>
+            </select>
+          </label>
+          <p class="setting-hint">Original keeps the game's HUD sampling. Sharp pixels keeps HUD edges crisp at larger resolutions.</p>
+          <label class="setting"><span>Shadows</span>
+            <select id="set-shadows">
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <p class="setting-hint">Turns the port's real-time shadows on or off.</p>
+        </section>
+        <section>
+          <h3>Display</h3>
+          <label class="setting"><span>Aspect ratio</span>
+            <select id="set-aspect">
+              <option value="4:3">4:3</option>
+              <option value="16:10">16:10</option>
+              <option value="16:9">16:9</option>
+              <option value="fill">Fill</option>
+            </select>
+          </label>
+          <p class="setting-hint">Chooses the game picture's shape. Fill uses the whole view and may stretch the picture.</p>
+          <label class="setting"><span>Resolution</span>
+            <select id="set-resolution">
+              <option value="window">Window</option>
+              <option value="416p">416p</option>
+              <option value="720p">720p</option>
+              <option value="1080p">1080p</option>
+              <option value="1440p">1440p</option>
+              <option value="2160p">2160p</option>
+            </select>
+          </label>
+          <p class="setting-hint">Sets the game's render height. Window follows the browser view; larger sizes need more GPU power.</p>
+          <label class="setting"><span>Fullscreen</span>
+            <select id="set-fullscreen">
+              <option value="off">Off</option>
+              <option value="on">On</option>
+            </select>
+          </label>
+          <p class="setting-hint">Opens the game in browser fullscreen when you press Play. The browser may require a user click.</p>
+        </section>
+        <section>
+          <h3>Performance</h3>
+          <label class="setting"><span>FPS limit</span>
+            <select id="set-fps-limit">
+              <option value="0">Off</option>
+              <option value="30">30</option>
+              <option value="60">60</option>
+              <option value="80">80</option>
+              <option value="100">100</option>
+              <option value="120">120</option>
+              <option value="144">144</option>
+              <option value="165">165</option>
+              <option value="200">200</option>
+              <option value="240">240</option>
+              <option value="300">300</option>
+              <option value="360">360</option>
+              <option value="480">480</option>
+            </select>
+          </label>
+          <p class="setting-hint">Caps how often the game renders. Off leaves the limit to the browser and display refresh rate.</p>
+          <label class="setting"><span>Occlusion culling</span>
+            <select id="set-culling">
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <p class="setting-hint">Skips level objects hidden behind solid geometry. Turn it off if an object disappears incorrectly.</p>
+          <label class="setting"><span>Low latency</span>
+            <select id="set-low-latency">
+              <option value="off">Off</option>
+              <option value="on">On</option>
+            </select>
+          </label>
+          <p class="setting-hint">Asks the browser for a lower-latency presentation mode when supported. The display still sets the top frame rate.</p>
+        </section>
+        <section>
+          <h3>Controls</h3>
+          <label class="setting"><span>Mouse controls</span>
+            <select id="set-mouse-enabled">
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <p class="setting-hint">Enables mouse camera input and map controls. Hold right mouse to look; drag the map with left mouse and use the wheel to zoom.</p>
+          <label class="setting"><span>Mouse sensitivity</span>
+            <select id="set-mouse-sensitivity">
+              <option value="0.5">0.5×</option>
+              <option value="0.75">0.75×</option>
+              <option value="1">1×</option>
+              <option value="1.25">1.25×</option>
+              <option value="1.5">1.5×</option>
+              <option value="2">2×</option>
+              <option value="3">3×</option>
+              <option value="4">4×</option>
+            </select>
+          </label>
+          <p class="setting-hint">Scales mouse camera movement. This does not change map zoom speed.</p>
+        </section>
+        <section>
+          <h3>Game</h3>
+          <label class="setting"><span>Start screen</span>
+            <select id="set-start-mode">
+              <option value="front-end">Title screen</option>
+              <option value="level">Start in a level</option>
+            </select>
+          </label>
+          <p class="setting-hint">Choose the title screen and opening, or skip them and load directly into a level.</p>
+          <label class="setting"><span>Start level</span>
+            <select id="set-level">
+              <option value="0">00 — Veldin (Kyzil Plateau)</option>
+              <option value="1">01 — Novalis</option>
+              <option value="2">02 — Aridia</option>
+              <option value="3">03 — Kerwan</option>
+              <option value="4">04 — Eudora</option>
+              <option value="5">05 — Rilgar</option>
+              <option value="6">06 — Blarg Station</option>
+              <option value="7">07 — Umbris</option>
+              <option value="8">08 — Batalia</option>
+              <option value="9">09 — Gaspar</option>
+              <option value="10">10 — Orxon</option>
+              <option value="11">11 — Pokitaru</option>
+              <option value="12">12 — Hoven</option>
+              <option value="13">13 — Gemlik Base</option>
+              <option value="14">14 — Oltanis</option>
+              <option value="15">15 — Quartu</option>
+              <option value="16">16 — Kalebo III</option>
+              <option value="17">17 — Drek's Fleet</option>
+              <option value="18">18 — Veldin (finale)</option>
+            </select>
+          </label>
+          <p class="setting-hint">Selects the level used by Start in a level. It has no effect when the title screen is selected.</p>
+        </section>
+      </div>
+      <div class="settings-foot">
+        <button id="settings-reset" class="secondary" type="button">Reset to defaults</button>
+        <span id="settings-saved">Saved</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="status" class="hidden">
+    <h1>WebRAC</h1>
+    <p id="status-text">Starting…</p>
+    <div class="bar"><div id="status-bar"></div></div>
+    <pre id="status-log"></pre>
+  </div>
+
+  <div id="hint">Click the game to focus · WASD / arrows: move · right mouse: camera · Space: jump · K: fire · J: wrench · Enter: pause</div>
+
+  <button id="skip" type="button">Skip <kbd>Enter / Backspace</kbd></button>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
