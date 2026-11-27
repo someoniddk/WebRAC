@@ -7,6 +7,8 @@ ReRAC's Rust/Bevy game engine, adapted to run in the browser with WebAssembly an
 You need your own copy of the game. This repository does not include the disc image or extracted game data. WebRAC is
 an unofficial fan project and is not affiliated with or endorsed by Sony Interactive Entertainment or Insomniac Games.
 
+<img width="1460" height="933" alt="Screenshot_20261127_032731" src="https://github.com/user-attachments/assets/38442215-c255-4d07-a720-11372d6bc9a3" />
+
 ## Run WebRAC
 
 You need Rust, the `wasm32-unknown-unknown` target, `wasm-bindgen-cli` 0.2.129, and Chromium with WebGPU enabled.
