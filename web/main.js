@@ -461,7 +461,15 @@ function startIsoHash(file, generation) {
     if (generation !== sourceSelectionGeneration || isoHashWorker !== worker) return;
     worker.terminate();
     isoHashWorker = null;
-    setGameDataStatus(`ISO check failed: ${event.message || "the background checker stopped"}.${priorGameDataMessage()}`, "error");
+    const details = [event.message, event.filename && `${event.filename}${event.lineno ? `:${event.lineno}` : ""}`].filter(Boolean).join(" at ");
+    const reason = details || "the background checker or its WebAssembly helper could not be loaded";
+    setGameDataStatus(`ISO check failed: ${reason}. The deployed site must include md5-worker.js and the generated pkg/webrac_iso.js and pkg/webrac_iso_bg.wasm files; rebuild Pages with ./web/build-pages.sh and output directory web/dist.${priorGameDataMessage()}`, "error");
+  });
+  worker.addEventListener("messageerror", () => {
+    if (generation !== sourceSelectionGeneration || isoHashWorker !== worker) return;
+    worker.terminate();
+    isoHashWorker = null;
+    setGameDataStatus(`ISO check failed: the background checker could not read its message. Rebuild Pages with ./web/build-pages.sh and output directory web/dist.${priorGameDataMessage()}`, "error");
   });
   worker.postMessage({ type: "hash", file });
 }
@@ -876,6 +884,16 @@ function setStatus(text, progress) {
   if (progress !== undefined) statusBar.style.width = `${Math.round(progress * 100)}%`;
 }
 
+async function loadPagesEngineWasm() {
+  const response = await fetch(new URL("./pkg/rerac_bg.wasm.gz", import.meta.url));
+  if (!response.ok) throw new Error(`Could not load the compressed game engine (HTTP ${response.status}).`);
+  if (!response.body || typeof DecompressionStream !== "function") {
+    throw new Error("This browser cannot unpack the game engine. Use a recent Chromium browser.");
+  }
+  const stream = response.body.pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 function fail(err) {
   window.__rerac.failed = true;
   console.error(err);
@@ -1017,7 +1035,8 @@ async function startGame() {
     setStatus("Loading the engine…", 0.1);
     const { default: init } = await import("./pkg/rerac.js");
     setStatus("Starting the engine…", 0.2);
-    await init();
+    const engineWasm = await loadPagesEngineWasm();
+    await init({ module_or_path: engineWasm });
     window.__rerac.started = true;
     // `main` runs at wasm start (wasm-bindgen's generated start calls it); the event loop takes over.
     const hide = () => { status.classList.add("hidden"); showHint(9); };

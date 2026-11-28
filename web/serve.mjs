@@ -41,6 +41,13 @@ const mime = {
   ".toml": "text/plain; charset=utf-8",
 };
 
+function contentHeaders(file) {
+  if (file.endsWith(".wasm.gz")) {
+    return { "Content-Type": "application/gzip" };
+  }
+  return { "Content-Type": mime[path.extname(file).toLowerCase()] || "application/octet-stream" };
+}
+
 function send(res, status, body, headers = {}) {
   res.writeHead(status, {
     "Cross-Origin-Opener-Policy": "same-origin",
@@ -84,7 +91,7 @@ const server = http.createServer((req, res) => {
       return;
     }
     res.writeHead(200, {
-      "Content-Type": mime[path.extname(file).toLowerCase()] || "application/octet-stream",
+      ...contentHeaders(file),
       "Content-Length": st.size,
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",

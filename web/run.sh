@@ -23,11 +23,11 @@ for arg in "$@"; do
   esac
 done
 
-# Cargo is incremental, so an up-to-date tree makes this a no-op; the check only avoids
-# the wasm-bindgen pass (and its 131 MiB copy) on launches where nothing changed.
+# Cargo is incremental, so an up-to-date tree makes this a no-op; the check avoids the
+# wasm-bindgen pass and gzip copy when the source and generated browser files are current.
 stale=1
-if [ "$build" = auto ] && [ -f "$here/pkg/rerac_bg.wasm" ] &&
-   [ -z "$(find "$root/crates" "$root/Cargo.toml" "$root/Cargo.lock" -type f \
+if [ "$build" = auto ] && [ -f "$here/pkg/rerac_bg.wasm" ] && [ -f "$here/pkg/rerac_bg.wasm.gz" ] &&
+   [ -z "$(find "$root/crates" "$root/Cargo.toml" "$root/Cargo.lock" "$here/build.sh" -type f \
              \( -name '*.rs' -o -name '*.toml' -o -name '*.wgsl' \) \
              -newer "$here/pkg/rerac_bg.wasm" -print -quit 2>/dev/null)" ]; then
   stale=0
@@ -38,7 +38,7 @@ if [ "$build" != never ] && [ "$stale" = 1 ]; then
   "$here/build.sh"
 fi
 
-if ! [ -f "$here/pkg/rerac_bg.wasm" ]; then
+if ! [ -f "$here/pkg/rerac_bg.wasm" ] || ! [ -f "$here/pkg/rerac_bg.wasm.gz" ]; then
   echo "web/pkg/ is missing; run ./web/build.sh first" >&2
   exit 1
 fi

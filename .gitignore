@@ -23,7 +23,9 @@
 
 # Browser build output and local browser profile
 /web/pkg/
+/web/dist/
 /web/rerac-chromium-profile/
+/.wrangler/
 
 # Local crash-reporting identifier
 /.sentry-native/

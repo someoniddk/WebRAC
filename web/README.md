@@ -119,11 +119,17 @@ level load can still pause the page while the engine reads its data.
 
 ## Cloudflare Pages deployment
 
-The selected game-data folder is local to each player, so it does not need to be
-included in the Pages deployment. The browser build still needs its generated
-`web/pkg/` glue and WASM files plus the engine shader assets. The generated
-`web/pkg/` directory is ignored by Git, and the current `rerac_bg.wasm` is about
-131 MiB, above Cloudflare Pages' 25 MiB limit for a single asset. Host the WASM
-separately (for example, in R2) or reduce it below the Pages limit before
-publishing; the launcher change alone does not make the current build deployable
-to Pages.
+In the Cloudflare Pages project, leave the repository root directory blank, set the build
+command to `./web/build-pages.sh`, and the build output directory to
+`web/dist`. The build script installs the Rust WebAssembly target and the
+matching `wasm-bindgen` CLI if needed, builds both WASM modules, copies the
+launcher and shader assets, and creates a deploy-ready directory. It places the
+small ISO indexer alongside its generated JavaScript so the background ISO
+checker does not fail because `web/pkg/` is ignored by Git.
+
+The game engine WASM is about 131 MiB uncompressed. The Pages build stores a
+gzip-compressed copy (about 22 MiB), below Cloudflare Pages' 25 MiB per-file
+limit. The launcher explicitly decompresses it in the browser before loading
+the engine, so this does not depend on Pages preserving a custom
+`Content-Encoding` header. The selected game-data folder or ISO remains local
+to each player and is never included in the Pages output.
