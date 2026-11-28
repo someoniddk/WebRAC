@@ -32,6 +32,13 @@ from **your own disc** — no game data is stored in this repository.
 - Browser audio is mixed by the engine and queued 120 ms ahead as scheduled
   WebAudio blocks. If playback does underrun or the browser suspends audio, a
   short fade-in reduces the pop when sound resumes.
+- The launcher can select or accept a dropped extracted game-data folder. It
+  checks the metadata and required files, then reads requested files from the
+  user's device. Game data is not uploaded or copied into browser storage; the
+  folder must be selected again after refreshing the page.
+- The launcher also accepts a dropped or selected USA v1.00 `.iso`. It checks
+  the full-image MD5, indexes the on-disc file ranges in a small WASM helper,
+  and reads game files from the original image as needed.
 
 The port itself is not a complete game yet; see the repository README.
 
@@ -41,8 +48,9 @@ The port itself is not a complete game yet; see the repository README.
    `rustup target add wasm32-unknown-unknown`
 2. `wasm-bindgen-cli` matching the lockfile:
    `cargo install wasm-bindgen-cli --version 0.2.129 --locked`
-3. The game data folder from your own disc, at `rerac-main/extracted/`
-   (`cargo xtask regen-data --iso "<path to your disc image>"`).
+3. For local development, the game data folder from your own disc at
+   `rerac-main/extracted/` (`cargo xtask regen-data --iso "<path to your disc image>"`).
+   Players using the browser launcher choose their extracted folder directly.
 4. **Chromium** with WebGPU (Chrome/Edge 113+ or the distribution Chromium).
    Firefox is not supported: its canvas presentation does not hold the game's
    60 Hz cadence and shows as jagged motion. Use the distribution package, not
@@ -83,11 +91,39 @@ The server maps:
 
 ## How the data reaches the engine
 
-The native engine reads the data folder with `std::fs`. In the browser the
-engine calls `window.readGameFile(path)` (`crates/rc-formats/src/web.rs`), which
-does a **synchronous same-origin XHR** and returns a `Uint8Array`. Synchronous
-XHR cannot use `responseType = "arraybuffer"`, so the loader asks for the
-`x-user-defined` charset and turns each char code back into a byte; this works
-in Chromium. The engine's level loaders are synchronous, so the first load
-blocks the page until Novalis is ready (about 160 MiB, roughly ten seconds on
-localhost); a movie file is read the same way when it starts.
+The native engine reads the data folder with `std::fs`. In the browser, the
+launcher uses the File System Access API where available, with a folder-input
+fallback and folder drag-and-drop support. It checks `extract-info.json`,
+`toc.bin`, the boot and shared game files, and required data in all 19 levels
+before enabling Play. It keeps the browser's `File` objects in memory for this page
+session and creates a local `blob:` URL only when the engine requests a file.
+No game files are sent to WebRAC's server or saved into browser storage. The
+folder must be selected again after a page refresh.
+
+The launcher can also use an uncompressed USA Ratchet & Clank v1.00 `.iso`
+directly. A background worker reads the selected image in chunks and checks its
+MD5 against `a62a8ae0e44c2580be38c82f48b7d181`; a different image is rejected.
+After a match, the small `rc-web-indexer` WASM helper reuses `rc-formats` to
+parse the ISO filesystem and game TOC, then returns each game's byte range. The
+existing loader makes a local blob URL for only the requested range. It does
+not extract the 4.2 GB image into browser storage, and the ISO stays on the
+player's device. Select the image again after a page refresh.
+
+The engine still calls `window.readGameFile(path)` (`crates/rc-formats/src/web.rs`)
+synchronously and receives a `Uint8Array`. This keeps the Rust/WASM loader intact;
+the browser reads the selected folder file or ISO range through a synchronous
+XHR against its local blob URL. The local development server's `/data/` route
+remains available. Large files are read only when the engine asks for them, so
+the whole extracted folder or ISO is not copied into browser storage. The first
+level load can still pause the page while the engine reads its data.
+
+## Cloudflare Pages deployment
+
+The selected game-data folder is local to each player, so it does not need to be
+included in the Pages deployment. The browser build still needs its generated
+`web/pkg/` glue and WASM files plus the engine shader assets. The generated
+`web/pkg/` directory is ignored by Git, and the current `rerac_bg.wasm` is about
+131 MiB, above Cloudflare Pages' 25 MiB limit for a single asset. Host the WASM
+separately (for example, in R2) or reduce it below the Pages limit before
+publishing; the launcher change alone does not make the current build deployable
+to Pages.

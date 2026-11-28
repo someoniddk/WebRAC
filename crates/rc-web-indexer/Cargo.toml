@@ -1,0 +1,16 @@
+[package]
+name = "rc-web-indexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Browser-side ISO indexer for WebRAC; reads a user-selected disc image without extracting it to storage."
+
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+md-5 = "0.11"
+js-sys = "0.3"
+wasm-bindgen = "0.2.129"
+rc-formats = { path = "../rc-formats" }

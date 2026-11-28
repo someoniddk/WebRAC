@@ -23,12 +23,12 @@
     /* ---- launcher ---- */
     #launcher {
       position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
-      padding: 2rem; text-align: center;
+      padding: 2rem; text-align: center; overflow-y: auto; box-sizing: border-box;
       background:
         radial-gradient(1100px 720px at 50% 18%, #17263d 0%, #0a1019 52%, #030507 100%);
     }
     #launcher.hidden { display: none; }
-    .launcher-card { display: flex; flex-direction: column; align-items: center; gap: 1.05rem; }
+    .launcher-card { display: flex; flex-direction: column; align-items: center; gap: 1.05rem; margin: auto; }
     .logo { width: min(26rem, 70vw); height: auto; filter: drop-shadow(0 18px 50px rgba(0, 0, 0, .55)); }
     .tagline { margin: 0; color: var(--muted); letter-spacing: .12em; text-transform: uppercase; font-size: .72rem; }
     .launch-row { display: flex; align-items: center; gap: .8rem; margin-top: .35rem; }
@@ -50,6 +50,35 @@
     .icon-button:hover { background: #162438; border-color: #36506d; transform: rotate(12deg); }
     .icon-button svg { width: 1.35rem; height: 1.35rem; fill: currentColor; }
     .launcher-note { max-width: min(32rem, 84vw); margin: .1rem 0 0; color: #6f8298; font-size: .76rem; line-height: 1.4; }
+    .game-data-picker { width: min(35rem, 86vw); display: grid; gap: .55rem; margin-top: .1rem; }
+    .choose-data {
+      appearance: none; justify-self: center; border: 1px solid #3f7fb3; border-radius: .55rem;
+      padding: .58rem 1.05rem; color: #06111c; background: linear-gradient(180deg, #a9e8ff, #5cc6ff);
+      font: inherit; font-size: .86rem; font-weight: 650; cursor: pointer;
+    }
+    .choose-data:hover { filter: brightness(1.07); }
+    .game-data-drop {
+      min-height: 2.9rem; display: flex; align-items: center; justify-content: center;
+      border: 1px dashed #3c6383; border-radius: .65rem; padding: .55rem .8rem;
+      color: #cbd7e5; background: rgba(11, 19, 29, .72); font: inherit; font-size: .82rem;
+      cursor: pointer; transition: background .12s ease, border-color .12s ease;
+    }
+    .game-data-drop:hover, .game-data-drop.dragging { border-color: var(--accent); background: rgba(25, 48, 70, .82); }
+    .game-data-drop:focus-visible, .choose-data:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .source-separator { display: flex; align-items: center; gap: .65rem; color: #71849a; font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; }
+    .source-separator::before, .source-separator::after { content: ""; height: 1px; flex: 1; background: #223044; }
+    .iso-note { margin: -.15rem 0 0; color: #71849a; font-size: .68rem; line-height: 1.45; }
+    .iso-note code { color: #a6b9cf; font-size: .67rem; overflow-wrap: anywhere; }
+    #game-data-status { min-height: 1.25em; margin: 0; color: #9fb0c3; font-size: .75rem; line-height: 1.4; white-space: pre-line; }
+    #game-data-status[data-state="ready"] { color: #9ce6b1; }
+    #game-data-status[data-state="error"] { color: #ffaaaa; }
+    .game-data-privacy { margin: 0; color: #6f8298; font-size: .7rem; line-height: 1.4; }
+    .play:disabled { cursor: not-allowed; filter: saturate(.45); opacity: .62; transform: none; }
+    @media (max-height: 760px) {
+      #launcher { padding: 1rem; align-items: flex-start; }
+      .launcher-card { gap: .72rem; }
+      .logo { width: min(19rem, 64vw); }
+    }
 
     /* ---- settings ---- */
     .modal {
@@ -140,13 +169,29 @@
       <img class="logo" src="./WEBRAC%20LOGO.png" alt="WebRAC">
       <p class="tagline">Ratchet &amp; Clank in the browser</p>
       <div class="launch-row">
-        <button id="play" class="play" type="button">Play</button>
+        <button id="play" class="play" type="button" disabled>Play</button>
         <button id="settings-button" class="icon-button" type="button" title="Settings" aria-label="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.48.48 0 0 0 .12-.61l-1.92-3.32a.48.48 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.48.48 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.48.48 0 0 0-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>
         </button>
       </div>
+      <section class="game-data-picker" aria-label="Game data">
+        <button id="select-game-data" class="choose-data" type="button">Choose extracted game-data folder</button>
+        <div id="game-data-drop" class="game-data-drop" role="button" tabindex="0" aria-describedby="game-data-status" aria-label="Drop the extracted game-data folder here or press Enter to choose it">
+          Drop the extracted folder here, or press Enter to browse
+        </div>
+        <input id="game-data-input" type="file" webkitdirectory directory multiple hidden aria-label="Choose extracted game-data folder">
+        <div class="source-separator">or use an ISO</div>
+        <button id="select-game-iso" class="choose-data" type="button">Choose USA Ratchet &amp; Clank ISO</button>
+        <div id="game-iso-drop" class="game-data-drop" role="button" tabindex="0" aria-describedby="game-data-status" aria-label="Drop the supported USA Ratchet and Clank ISO here or press Enter to choose it">
+          Drop the supported USA .iso file here, or press Enter to browse
+        </div>
+        <input id="game-iso-input" type="file" accept=".iso,application/x-iso9660-image,application/octet-stream" hidden aria-label="Choose USA Ratchet and Clank ISO">
+        <p class="iso-note">USA disc v1.00 only · MD5 <code>a62a8ae0e44c2580be38c82f48b7d181</code>. WebRAC checks the image in chunks, then reads game files from it as needed.</p>
+        <p id="game-data-status" role="status" aria-live="polite" data-state="checking">Checking for local game data…</p>
+        <p class="game-data-privacy">Use an ISO or extracted data from a game disc you own. Files stay on this device; nothing is uploaded or copied into browser storage. USB/SD folders work when your browser allows access. Choose the file or folder again after refreshing this page.</p>
+      </section>
       <p class="launcher-note">WebRAC is a fork of ReRAC, based on the ReRAC engine.</p>
-      <p class="launcher-note">Bring your own extracted disc data · Chromium with WebGPU</p>
+      <p class="launcher-note">Chromium with WebGPU is required.</p>
     </div>
   </div>
 

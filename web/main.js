@@ -1,9 +1,8 @@
 // WebRAC browser shell: a fork based on ReRAC's engine, with game-data access, launcher settings, and wasm start.
 //
 // The engine's loaders are synchronous (the native port reads the extracted data folder with
-// `std::fs`), so the browser build reads the same folder with a synchronous same-origin XHR.
-// The engine calls `window.readGameFile("levels/01/core_data.bin")`; the server maps `/data/`
-// to the extracted folder.
+// `std::fs`). In the browser the launcher maps user-selected local Files to blob URLs; the local
+// development server can still provide the same files from `/data/`.
 
 const launcher = document.getElementById("launcher");
 const settingsModal = document.getElementById("settings");
@@ -18,7 +17,504 @@ const statusText = document.getElementById("status-text");
 const statusBar = document.getElementById("status-bar");
 const statusLog = document.getElementById("status-log");
 const hint = document.getElementById("hint");
+const selectGameDataButton = document.getElementById("select-game-data");
+const gameDataInput = document.getElementById("game-data-input");
+const gameDataDrop = document.getElementById("game-data-drop");
+const selectGameIsoButton = document.getElementById("select-game-iso");
+const gameIsoInput = document.getElementById("game-iso-input");
+const gameIsoDrop = document.getElementById("game-iso-drop");
+const gameDataStatus = document.getElementById("game-data-status");
 let hintTimer = 0;
+
+// The selected File objects point at the user's files; only requested files are read into memory.
+// Their blob URLs let the existing synchronous Rust/WASM file API keep working without uploading game data.
+let selectedGameFiles = null;
+let selectedIsoFile = null;
+let selectedIsoFiles = null;
+let isoFileBeingIndexed = null;
+let localGameDataAvailable = false;
+let localDataProbePromise = null;
+let localGameDataProbeComplete = false;
+let sourceSelectionGeneration = 0;
+let isoHashWorker = null;
+const gameFileObjectUrls = new Map();
+
+function gameDataIsAvailable() {
+  return selectedGameFiles !== null || selectedIsoFiles !== null || localGameDataAvailable;
+}
+
+function setGameDataStatus(message, state = "empty") {
+  gameDataStatus.textContent = message;
+  gameDataStatus.dataset.state = state;
+  playButton.disabled = !gameDataIsAvailable();
+}
+
+function canonicalDataPath(path) {
+  const parts = String(path).replace(/\\/g, "/").split("/").filter(Boolean);
+  if (!parts.length || parts.some((part) => part === "." || part === ".." || part.includes("\0"))) return null;
+  return parts.join("/");
+}
+
+function indexSelectedFiles(entries) {
+  const allFiles = new Map();
+  for (const entry of entries) {
+    const path = canonicalDataPath(entry.path);
+    if (path && entry.file) allFiles.set(path.toLowerCase(), { path, file: entry.file });
+  }
+
+  const tocCandidates = [...allFiles.values()].filter(({ path }) => /(^|\/)toc\.bin$/i.test(path));
+  if (!tocCandidates.length) {
+    throw new Error("No toc.bin was found. Choose the extracted game-data folder containing toc.bin and extract-info.json.");
+  }
+  const toc = tocCandidates.find(({ path }) => {
+    const slash = path.lastIndexOf("/");
+    const prefix = slash < 0 ? "" : path.slice(0, slash + 1);
+    return allFiles.has(`${prefix}extract-info.json`.toLowerCase());
+  }) || tocCandidates[0];
+  const slash = toc.path.lastIndexOf("/");
+  const rootPrefix = slash < 0 ? "" : toc.path.slice(0, slash + 1);
+  const rootPrefixLower = rootPrefix.toLowerCase();
+  const files = new Map();
+  for (const [key, item] of allFiles) {
+    if (rootPrefixLower && !key.startsWith(rootPrefixLower)) continue;
+    const relativePath = rootPrefix ? item.path.slice(rootPrefix.length) : item.path;
+    const normalizedPath = canonicalDataPath(relativePath);
+    if (normalizedPath) files.set(normalizedPath.toLowerCase(), item.file);
+  }
+  return files;
+}
+
+function validateGameDataInfo(info) {
+  if (!info || typeof info !== "object" || Array.isArray(info)) {
+    throw new Error("extract-info.json is not a valid metadata object.");
+  }
+  if (info.data_format !== 1) {
+    throw new Error(`This folder uses data format ${String(info.data_format)}. WebRAC needs data format 1; re-extract the game data with the matching WebRAC/ReRAC extractor.`);
+  }
+  if (info.game && info.game !== "rac1") {
+    throw new Error(`This folder is for ${String(info.game)}, but WebRAC currently needs Ratchet & Clank (2002) data.`);
+  }
+  const normalizedDisc = typeof info.disc === "string" ? info.disc.toLowerCase().replace(/[^a-z0-9]/g, "") : "";
+  if (normalizedDisc !== "scus97199") {
+    throw new Error(`This folder identifies disc ${String(info.disc || "unknown")}. WebRAC currently supports the NTSC-U SCUS_971.99 data format.`);
+  }
+  return info;
+}
+
+function requiredGameDataPaths() {
+  const paths = [
+    "toc.bin",
+    "boot/SYSTEM.CNF",
+    "boot/SCUS_971.99",
+    "global/all_text.bin",
+    "global/frontbin.bin",
+    "global/hud_header.bin",
+    "global/irx.bin",
+    "global/music.bin",
+    "global/save_game.bin",
+    "global/sound_bank.bin",
+    "global/transition.bin",
+    "global/unknown_14e8.bin",
+    "global/vendor.bin",
+  ];
+  for (let level = 0; level <= 18; level++) {
+    const number = String(level).padStart(2, "0");
+    const directory = `levels/${number}/`;
+    paths.push(
+      `${directory}level_header.bin`,
+      `${directory}overlay.bin`,
+      `${directory}core_index.bin`,
+      `${directory}gs_ram.bin`,
+      `${directory}core_data.bin`,
+      `${directory}gameplay_ntsc.bin`,
+      `${directory}sound_bank.bin`,
+    );
+    for (let bank = 0; bank < 5; bank++) paths.push(`${directory}hud_bank_${bank}.bin`);
+  }
+  return paths;
+}
+
+async function inspectSelectedGameFiles(entries) {
+  const files = indexSelectedFiles(entries);
+  const infoFile = files.get("extract-info.json");
+  if (!infoFile) throw new Error("extract-info.json is missing beside toc.bin. Choose the extracted game-data folder, not a folder from inside it.");
+
+  let info;
+  try {
+    info = validateGameDataInfo(JSON.parse(await infoFile.text()));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("extract-info.json could not be read as JSON. Re-extract the game data and choose that folder again.");
+    throw error;
+  }
+
+  const missing = [];
+  const empty = [];
+  for (const path of requiredGameDataPaths()) {
+    const file = files.get(path.toLowerCase());
+    if (!file) missing.push(path);
+    else if (file.size === 0 && !/\/hud_bank_\d+\.bin$/i.test(path)) empty.push(path);
+  }
+  if (missing.length || empty.length) {
+    const details = [];
+    if (missing.length) details.push(`Missing ${missing.length} required file(s): ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? ", …" : ""}.`);
+    if (empty.length) details.push(`Empty required file(s): ${empty.slice(0, 5).join(", ")}${empty.length > 5 ? ", …" : ""}.`);
+    throw new Error(`${details.join(" ")} Re-extract the complete game-data folder and try again.`);
+  }
+  return { files, info };
+}
+
+function releaseGameFileObjectUrls() {
+  for (const url of gameFileObjectUrls.values()) URL.revokeObjectURL(url);
+  gameFileObjectUrls.clear();
+}
+
+function formatGameDataSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  return `, about ${(bytes / 1_000_000_000).toFixed(1)} GB`;
+}
+
+function beginSourceSelection() {
+  const generation = ++sourceSelectionGeneration;
+  if (isoHashWorker) {
+    isoHashWorker.terminate();
+    isoHashWorker = null;
+    setGameDataStatus("ISO check cancelled. Choose a folder or image to continue.", "checking");
+  }
+  return generation;
+}
+
+function priorGameDataMessage() {
+  if (selectedGameFiles) return " Your previous extracted folder is still ready.";
+  if (selectedIsoFiles) return " Your previous ISO is still ready.";
+  if (localGameDataAvailable) return " Local development data is still ready.";
+  return "";
+}
+
+function restoreGameDataStatus() {
+  if (selectedIsoFiles) setGameDataStatus("The selected USA ISO is still ready to play.", "ready");
+  else if (selectedGameFiles) setGameDataStatus("The selected extracted folder is still ready to play.", "ready");
+  else if (localGameDataAvailable) setGameDataStatus("Local extracted game data found. Ready to play.", "ready");
+  else setGameDataStatus("Choose an extracted folder or supported USA ISO to continue. This page does not include game files.", "empty");
+}
+
+async function acceptGameDataFiles(entries, generation) {
+  if (generation !== sourceSelectionGeneration) return;
+  setGameDataStatus("Scanning the selected folder… This checks file names and a small metadata file.", "checking");
+  try {
+    if (!entries.length) throw new Error("The selected folder did not contain any visible files.");
+    const checked = await inspectSelectedGameFiles(entries);
+    if (generation !== sourceSelectionGeneration) return;
+    releaseGameFileObjectUrls();
+    selectedGameFiles = checked.files;
+    selectedIsoFile = null;
+    selectedIsoFiles = null;
+    const fileCount = Number.isInteger(checked.info.files) ? `${checked.info.files.toLocaleString()} extracted files` : "extracted files";
+    setGameDataStatus(`Game data ready — ${fileCount}${formatGameDataSize(checked.info.bytes)}. Ready to play.`, "ready");
+  } catch (error) {
+    if (generation !== sourceSelectionGeneration) return;
+    setGameDataStatus(`Folder not accepted: ${error instanceof Error ? error.message : String(error)}${priorGameDataMessage()}`, "error");
+  }
+}
+
+async function collectDirectoryHandle(handle, prefix, output) {
+  if (handle.kind === "file") {
+    const file = await handle.getFile();
+    output.push({ path: prefix || handle.name, file });
+    return;
+  }
+  const pending = [];
+  for await (const [name, child] of handle.entries()) {
+    const childPath = prefix ? `${prefix}/${name}` : name;
+    if (child.kind === "directory") pending.push(collectDirectoryHandle(child, childPath, output));
+    else pending.push(child.getFile().then((file) => output.push({ path: childPath, file })));
+  }
+  await Promise.all(pending);
+}
+
+function readLegacyEntryFile(entry) {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+function readLegacyDirectoryBatch(reader) {
+  return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+}
+
+async function collectLegacyEntry(entry, prefix, output) {
+  if (entry.isFile) {
+    const file = await readLegacyEntryFile(entry);
+    output.push({ path: prefix ? `${prefix}/${entry.name}` : entry.name, file });
+    return;
+  }
+  if (!entry.isDirectory) return;
+  const directoryPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+  const reader = entry.createReader();
+  const children = [];
+  while (true) {
+    const batch = await readLegacyDirectoryBatch(reader);
+    if (!batch.length) break;
+    children.push(...batch);
+  }
+  await Promise.all(children.map((child) => collectLegacyEntry(child, directoryPath, output)));
+}
+
+async function openGameDataPicker() {
+  const generation = beginSourceSelection();
+  if (typeof window.showDirectoryPicker !== "function" || !window.isSecureContext) {
+    gameDataInput.dataset.selectionGeneration = String(generation);
+    gameDataInput.click();
+    return;
+  }
+  try {
+    const directory = await window.showDirectoryPicker({ mode: "read" });
+    const entries = [];
+    setGameDataStatus("Reading the selected folder structure…", "checking");
+    await collectDirectoryHandle(directory, "", entries);
+    await acceptGameDataFiles(entries, generation);
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      if (generation === sourceSelectionGeneration) restoreGameDataStatus();
+      return;
+    }
+    if (generation !== sourceSelectionGeneration) return;
+    setGameDataStatus(`Could not open that folder: ${error instanceof Error ? error.message : String(error)}. You can try the folder button again.`, "error");
+  }
+}
+
+selectGameDataButton.addEventListener("click", openGameDataPicker);
+gameDataDrop.addEventListener("click", openGameDataPicker);
+gameDataDrop.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    openGameDataPicker();
+  }
+});
+gameDataInput.addEventListener("change", () => {
+  const entries = Array.from(gameDataInput.files || [], (file) => ({ path: file.webkitRelativePath || file.name, file }));
+  const generation = Number(gameDataInput.dataset.selectionGeneration) || beginSourceSelection();
+  delete gameDataInput.dataset.selectionGeneration;
+  gameDataInput.value = "";
+  acceptGameDataFiles(entries, generation);
+});
+gameDataInput.addEventListener("cancel", () => {
+  delete gameDataInput.dataset.selectionGeneration;
+  restoreGameDataStatus();
+});
+for (const eventName of ["dragenter", "dragover"]) {
+  gameDataDrop.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    gameDataDrop.classList.add("dragging");
+  });
+}
+for (const eventName of ["dragleave", "drop"]) {
+  gameDataDrop.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    gameDataDrop.classList.remove("dragging");
+  });
+}
+gameDataDrop.addEventListener("drop", async (event) => {
+  const generation = beginSourceSelection();
+  setGameDataStatus("Reading the dropped folder structure…", "checking");
+  const items = Array.from(event.dataTransfer?.items || []).filter((item) => item.kind === "file");
+  try {
+    const entries = [];
+    let folderRead = false;
+    if (items.length && typeof items[0].getAsFileSystemHandle === "function") {
+      const handles = await Promise.all(items.map((item) => item.getAsFileSystemHandle()));
+      const usableHandles = handles.filter(Boolean);
+      for (const handle of usableHandles) await collectDirectoryHandle(handle, "", entries);
+      folderRead = usableHandles.length > 0;
+    }
+    if (!folderRead) {
+      const legacyEntries = items.map((item) => typeof item.webkitGetAsEntry === "function" ? item.webkitGetAsEntry() : null).filter(Boolean);
+      if (legacyEntries.length) {
+        await Promise.all(legacyEntries.map((entry) => collectLegacyEntry(entry, "", entries)));
+        folderRead = true;
+      }
+    }
+    if (!folderRead) {
+      const files = Array.from(event.dataTransfer?.files || []);
+      entries.push(...files.map((file) => ({ path: file.webkitRelativePath || file.name, file })));
+    }
+    await acceptGameDataFiles(entries, generation);
+  } catch (error) {
+    if (generation !== sourceSelectionGeneration) return;
+    setGameDataStatus(`Could not read the dropped folder: ${error instanceof Error ? error.message : String(error)}. Use the folder button to select it.`, "error");
+  }
+});
+
+const EXPECTED_USA_ISO_MD5 = "a62a8ae0e44c2580be38c82f48b7d181";
+
+function validateIsoFileIndex(records, imageSize) {
+  const files = new Map();
+  for (const record of Array.from(records || [])) {
+    const path = canonicalDataPath(record.path);
+    const offset = Number(record.offset);
+    const bytes = Number(record.bytes);
+    if (!path || !Number.isSafeInteger(offset) || !Number.isSafeInteger(bytes) || offset < 0 || bytes < 0 || offset + bytes > imageSize) {
+      throw new Error("The disc index contains an invalid file path or range.");
+    }
+    const key = path.toLowerCase();
+    if (files.has(key)) throw new Error(`The disc index contains a repeated path: ${path}`);
+    files.set(key, { offset, bytes });
+  }
+
+  const missing = requiredGameDataPaths().filter((path) => !files.has(path.toLowerCase()));
+  if (missing.length) {
+    throw new Error(`The recognized disc is missing ${missing.length} game file(s), including ${missing.slice(0, 6).join(", ")}.`);
+  }
+  return files;
+}
+
+window.readIsoBytes = function readIsoBytes(offset, length) {
+  if (!isoFileBeingIndexed) throw new Error("ISO indexing requested bytes before a disc image was selected.");
+  const start = Number(offset);
+  const count = Number(length);
+  const end = start + count;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count) || count < 0 || start < 0 || end > isoFileBeingIndexed.size) {
+    throw new Error("ISO indexer requested a byte range outside the selected image.");
+  }
+
+  const blob = isoFileBeingIndexed.slice(start, end);
+  if (blob.size !== count) throw new Error("The selected ISO ended before the requested byte range.");
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", objectUrl, false);
+    xhr.overrideMimeType("text/plain; charset=x-user-defined");
+    xhr.send(null);
+    if (xhr.status !== 200) throw new Error(`could not read ISO byte range (HTTP ${xhr.status})`);
+    const text = xhr.responseText;
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+    return bytes;
+  } catch (error) {
+    throw new Error(`could not index the selected ISO: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+};
+
+async function indexVerifiedIso(file, generation) {
+  setGameDataStatus("USA image hash matches. Reading its disc index…", "checking");
+  try {
+    const { default: initIndexer, index_disc_image: indexDiscImage } = await import("./pkg/webrac_iso.js");
+    await initIndexer();
+    if (generation !== sourceSelectionGeneration) return;
+
+    isoFileBeingIndexed = file;
+    let records;
+    try {
+      records = indexDiscImage(file.size);
+    } finally {
+      isoFileBeingIndexed = null;
+    }
+    if (generation !== sourceSelectionGeneration) return;
+    const files = validateIsoFileIndex(records, file.size);
+    releaseGameFileObjectUrls();
+    selectedGameFiles = null;
+    selectedIsoFile = file;
+    selectedIsoFiles = files;
+    setGameDataStatus(`USA Ratchet & Clank ISO verified — ${files.size.toLocaleString()} game files indexed${formatGameDataSize(file.size)}. Ready to play.`, "ready");
+  } catch (error) {
+    isoFileBeingIndexed = null;
+    if (generation !== sourceSelectionGeneration) return;
+    setGameDataStatus(`ISO could not be prepared: ${error instanceof Error ? error.message : String(error)}${priorGameDataMessage()}`, "error");
+  }
+}
+
+function startIsoHash(file, generation) {
+  if (generation !== sourceSelectionGeneration) return;
+  setGameDataStatus("Checking the whole ISO against the supported USA disc MD5… 0%", "checking");
+  let worker;
+  try {
+    worker = new Worker(new URL("./md5-worker.js", import.meta.url), { type: "module" });
+  } catch (error) {
+    setGameDataStatus(`This browser could not start the ISO checker: ${error instanceof Error ? error.message : String(error)}. Choose an extracted folder instead.${priorGameDataMessage()}`, "error");
+    return;
+  }
+  isoHashWorker = worker;
+  worker.addEventListener("message", (event) => {
+    if (generation !== sourceSelectionGeneration || isoHashWorker !== worker) return;
+    const message = event.data || {};
+    if (message.type === "progress") {
+      const percent = Math.min(100, Math.floor(message.done / Math.max(1, message.total) * 100));
+      const readGb = (message.done / 1_000_000_000).toFixed(1);
+      const totalGb = (message.total / 1_000_000_000).toFixed(1);
+      setGameDataStatus(`Checking the whole ISO against the supported USA disc MD5… ${percent}% (${readGb} / ${totalGb} GB)`, "checking");
+      return;
+    }
+    worker.terminate();
+    isoHashWorker = null;
+    if (message.type === "error") {
+      setGameDataStatus(`ISO check failed: ${String(message.message || "the file could not be read")}${priorGameDataMessage()}`, "error");
+      return;
+    }
+    if (message.type !== "complete") return;
+    const actualMd5 = String(message.md5 || "").toLowerCase();
+    if (actualMd5 !== EXPECTED_USA_ISO_MD5) {
+      setGameDataStatus(`This is not the supported USA v1.00 image. Its MD5 is ${actualMd5 || "unavailable"}; expected ${EXPECTED_USA_ISO_MD5}.${priorGameDataMessage()}`, "error");
+      return;
+    }
+    indexVerifiedIso(file, generation);
+  });
+  worker.addEventListener("error", (event) => {
+    if (generation !== sourceSelectionGeneration || isoHashWorker !== worker) return;
+    worker.terminate();
+    isoHashWorker = null;
+    setGameDataStatus(`ISO check failed: ${event.message || "the background checker stopped"}.${priorGameDataMessage()}`, "error");
+  });
+  worker.postMessage({ type: "hash", file });
+}
+
+function openIsoPicker() {
+  const generation = beginSourceSelection();
+  gameIsoInput.dataset.selectionGeneration = String(generation);
+  gameIsoInput.click();
+}
+
+selectGameIsoButton.addEventListener("click", openIsoPicker);
+gameIsoDrop.addEventListener("click", openIsoPicker);
+gameIsoDrop.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    openIsoPicker();
+  }
+});
+gameIsoInput.addEventListener("change", () => {
+  const file = gameIsoInput.files?.[0] || null;
+  const generation = Number(gameIsoInput.dataset.selectionGeneration) || beginSourceSelection();
+  delete gameIsoInput.dataset.selectionGeneration;
+  gameIsoInput.value = "";
+  if (!file) return;
+  startIsoHash(file, generation);
+});
+gameIsoInput.addEventListener("cancel", () => {
+  delete gameIsoInput.dataset.selectionGeneration;
+  restoreGameDataStatus();
+});
+for (const eventName of ["dragenter", "dragover"]) {
+  gameIsoDrop.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    gameIsoDrop.classList.add("dragging");
+  });
+}
+for (const eventName of ["dragleave", "drop"]) {
+  gameIsoDrop.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    gameIsoDrop.classList.remove("dragging");
+  });
+}
+gameIsoDrop.addEventListener("drop", (event) => {
+  const files = Array.from(event.dataTransfer?.files || []);
+  const generation = beginSourceSelection();
+  if (files.length !== 1) {
+    setGameDataStatus(`Drop one ISO image at a time.${priorGameDataMessage()}`, "error");
+    return;
+  }
+  startIsoHash(files[0], generation);
+});
+
+window.addEventListener("beforeunload", releaseGameFileObjectUrls);
 
 // The control hint is a quiet bottom pill: it greets the player for a few seconds, then only appears while the
 // pointer rests near the bottom edge (so it never covers the picture during play).
@@ -400,19 +896,47 @@ let lastStatus = 0;
 
 // Same-origin synchronous read used by `rc_formats::web::read` (`#[wasm_bindgen] extern "C"`).
 window.readGameFile = function readGameFile(path) {
-  const url = new URL("data/" + path.replace(/^\/+/, ""), document.baseURI);
+  const relativePath = canonicalDataPath(path);
+  if (!relativePath) throw new Error(`readGameFile(${path}): invalid game-data path`);
+  let url;
+  if (selectedIsoFiles) {
+    const entry = selectedIsoFiles.get(relativePath.toLowerCase());
+    if (!entry) throw new Error(`readGameFile(${relativePath}): this file is missing from the indexed ISO. Choose a complete supported image again.`);
+    let objectUrl = gameFileObjectUrls.get(relativePath.toLowerCase());
+    if (!objectUrl) {
+      const blob = selectedIsoFile.slice(entry.offset, entry.offset + entry.bytes);
+      if (blob.size !== entry.bytes) throw new Error(`readGameFile(${relativePath}): the selected ISO file range is no longer available.`);
+      objectUrl = URL.createObjectURL(blob);
+      gameFileObjectUrls.set(relativePath.toLowerCase(), objectUrl);
+    }
+    url = objectUrl;
+  } else if (selectedGameFiles) {
+    const file = selectedGameFiles.get(relativePath.toLowerCase());
+    if (!file) throw new Error(`readGameFile(${relativePath}): this file is missing from the selected game-data folder. Choose a complete extraction again.`);
+    let objectUrl = gameFileObjectUrls.get(relativePath.toLowerCase());
+    if (!objectUrl) {
+      objectUrl = URL.createObjectURL(file);
+      gameFileObjectUrls.set(relativePath.toLowerCase(), objectUrl);
+    }
+    url = objectUrl;
+  } else if (localGameDataAvailable) {
+    url = new URL("data/" + relativePath, document.baseURI);
+  } else {
+    throw new Error(`readGameFile(${relativePath}): choose an extracted game-data folder or supported USA ISO before starting WebRAC.`);
+  }
   const xhr = new XMLHttpRequest();
-  xhr.open("GET", url, false); // synchronous on purpose: the engine's loaders block
+  xhr.open("GET", url, false); // synchronous on purpose: the Rust/WASM engine's loaders block
   // A synchronous XHR cannot use responseType = "arraybuffer" in Chromium.
   // The x-user-defined charset maps every byte to one char code, so `responseText` is the file.
   xhr.overrideMimeType("text/plain; charset=x-user-defined");
   try {
     xhr.send(null);
   } catch (e) {
-    throw new Error(`readGameFile(${path}): ${e}`);
+    throw new Error(`readGameFile(${relativePath}): ${e}; if the game data is on removable storage, reconnect it and choose the folder again`);
   }
   if (xhr.status !== 200) {
-    throw new Error(`readGameFile(${path}): HTTP ${xhr.status}; is the extracted data folder served at /data/?`);
+    const source = selectedIsoFiles ? "the selected ISO or removable drive" : selectedGameFiles ? "the selected folder or removable drive" : "the extracted data served at /data/";
+    throw new Error(`readGameFile(${relativePath}): HTTP ${xhr.status}; check ${source} and choose the folder again if needed`);
   }
   const text = xhr.responseText;
   const bytes = new Uint8Array(text.length);
@@ -426,6 +950,30 @@ window.readGameFile = function readGameFile(path) {
   }
   return bytes;
 };
+
+async function probeLocalGameData() {
+  try {
+    const infoUrl = new URL("data/extract-info.json", document.baseURI);
+    const tocUrl = new URL("data/toc.bin", document.baseURI);
+    const [infoResponse, tocResponse] = await Promise.all([
+      fetch(infoUrl, { cache: "no-store" }),
+      fetch(tocUrl, { method: "HEAD", cache: "no-store" }),
+    ]);
+    if (!infoResponse.ok || !tocResponse.ok) throw new Error("No local /data/ folder was found");
+    validateGameDataInfo(await infoResponse.json());
+    localGameDataAvailable = true;
+    if (!selectedGameFiles && !selectedIsoFiles) {
+      setGameDataStatus("Local extracted game data found. Ready to play, or choose another folder or ISO above.", "ready");
+    }
+  } catch {
+    localGameDataAvailable = false;
+    if (!selectedGameFiles && !selectedIsoFiles) {
+      setGameDataStatus("Choose an extracted folder or supported USA ISO to continue. This page does not include game files.", "empty");
+    }
+  } finally {
+    localGameDataProbeComplete = true;
+  }
+}
 
 // The engine writes progress with console.log; surface the important lines on the loading screen.
 const nativeLog = console.log;
@@ -443,6 +991,12 @@ let starting = false;
 async function startGame() {
   if (starting || window.__rerac.started) return;
   starting = true;
+  if (!selectedGameFiles && !localGameDataProbeComplete && localDataProbePromise) await localDataProbePromise;
+  if (!gameDataIsAvailable()) {
+    starting = false;
+    setGameDataStatus("Choose a complete extracted folder or supported USA ISO before pressing Play.", "empty");
+    return;
+  }
   // Fullscreen must be requested directly from the Play gesture; the Rust window
   // setting applies again after the renderer starts.
   if (settings.fullscreen === "on" && !document.fullscreenElement && document.documentElement.requestFullscreen) {
@@ -481,4 +1035,5 @@ async function startGame() {
 playButton.addEventListener("click", startGame);
 
 // A launcher is the normal path. `RC_AUTOSTART=1` (a test run) starts immediately with the saved settings.
-if (new URLSearchParams(window.location.search).get("RC_AUTOSTART") === "1") startGame();
+localDataProbePromise = probeLocalGameData();
+if (new URLSearchParams(window.location.search).get("RC_AUTOSTART") === "1") localDataProbePromise.then(startGame);

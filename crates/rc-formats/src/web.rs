@@ -1,11 +1,11 @@
 //! Game-data file access in the browser build.
 //!
 //! The native runtime reads the extracted data folder with `std::fs`.  A `wasm32-unknown-unknown`
-//! build has no filesystem, so the web shell installs `window.readGameFile(path)`, which fetches a
-//! file from the data folder over HTTP and returns its bytes.  The call is synchronous on purpose:
-//! the engine's loaders are synchronous, and this prototype loads one level before the first frame.
-//! (Browsers still allow same-origin synchronous `XMLHttpRequest`; it blocks the main thread only
-//! while a level is being read, which is exactly the loading screen.)
+//! build has no filesystem, so the web shell installs `window.readGameFile(path)`, which returns
+//! bytes from either a browser-selected local File (through a blob URL) or the development server's
+//! `/data/` route. The call is synchronous on purpose: the engine's loaders are synchronous, and
+//! this prototype loads one level before the first frame. It blocks the main thread while a file is
+//! read, which is covered by the loading screen.
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
