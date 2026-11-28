@@ -902,7 +902,12 @@ function fail(err) {
   status.classList.remove("hidden");
   status.classList.add("error");
   status.querySelector("h1").textContent = "WebRAC could not start";
-  statusText.textContent = "The browser console has the full log.";
+  const errorMessage = String(err && err.message ? err.message : err);
+  const isFirefox = /Firefox\//i.test(navigator.userAgent);
+  const missingWebGpu = /WebGPU is not available in this browser/i.test(errorMessage);
+  statusText.textContent = isFirefox && missingWebGpu
+    ? "Firefox does not provide the WebGPU support this WebRAC build needs. Open this page in Chrome, Edge 113+, or Chromium to play."
+    : "The browser console has the full log.";
   statusLog.textContent = String(err && err.stack ? err.stack : err);
   hint.classList.remove("show");
   clearTimeout(hintTimer);
