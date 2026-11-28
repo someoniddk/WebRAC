@@ -123,9 +123,10 @@ In the Cloudflare Pages project, leave the repository root directory blank, set 
 command to `./web/build-pages.sh`, and the build output directory to
 `web/dist`. The build script installs the Rust WebAssembly target and the
 matching `wasm-bindgen` CLI if needed, builds both WASM modules, copies the
-launcher and shader assets, and creates a deploy-ready directory. It places the
-small ISO indexer alongside its generated JavaScript so the background ISO
-checker does not fail because `web/pkg/` is ignored by Git.
+launcher and shader assets, and creates a deploy-ready directory. The regular
+`./web/build.sh` also refreshes the deployable files under `web/pkg/` and the
+shader copy under `web/assets/`, so a Workers static-assets deployment rooted
+at `web/` has the paths used by the launcher and ISO checker.
 
 The game engine WASM is about 131 MiB uncompressed. The Pages build stores a
 gzip-compressed copy (about 22 MiB), below Cloudflare Pages' 25 MiB per-file

@@ -21,8 +21,8 @@
 # Release packages (tools/package/package.sh)
 /dist/
 
-# Browser build output and local browser profile
-/web/pkg/
+# Browser build output: keep deployable JS/WASM files in Git, but leave the 131 MiB raw engine local.
+/web/pkg/rerac_bg.wasm
 /web/dist/
 /web/rerac-chromium-profile/
 /.wrangler/

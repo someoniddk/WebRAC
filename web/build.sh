@@ -13,6 +13,29 @@ wasm-bindgen --target web --out-dir web/pkg --out-name rerac --no-typescript \
 wasm-bindgen --target web --out-dir web/pkg --out-name webrac_iso --no-typescript \
   "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/rc_web_indexer.wasm"
 
+node --input-type=module <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+
+function cleanGeneratedJavaScript(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      cleanGeneratedJavaScript(file);
+    } else if (file.endsWith(".js")) {
+      const source = fs.readFileSync(file, "utf8");
+      const clean = source.replace(/[ \t]+$/gm, "").replace(/\n*$/, "\n");
+      if (clean !== source) fs.writeFileSync(file, clean);
+    }
+  }
+}
+
+cleanGeneratedJavaScript("web/pkg");
+NODE
+
+mkdir -p web/assets
+cp -a crates/rc-engine/assets/. web/assets/
+
 node --input-type=module - web/pkg/rerac_bg.wasm web/pkg/rerac_bg.wasm.gz <<'NODE'
 import fs from "node:fs";
 import zlib from "node:zlib";

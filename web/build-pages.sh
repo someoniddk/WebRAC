@@ -34,7 +34,7 @@ rm -rf "$dist"
 mkdir -p "$dist/pkg"
 cp "$repo_root/web/index.html" "$repo_root/web/main.js" "$repo_root/web/md5-worker.js" "$repo_root/web/WEBRAC LOGO.png" "$repo_root/web/_headers" "$dist/"
 cp -a "$repo_root/web/pkg/." "$dist/pkg/"
-cp -a "$repo_root/crates/rc-engine/assets" "$dist/assets"
+cp -a "$repo_root/web/assets" "$dist/assets"
 rm -f "$dist/pkg/rerac_bg.wasm"
 
 node --input-type=module - "$dist/pkg/rerac_bg.wasm.gz" <<'NODE'
